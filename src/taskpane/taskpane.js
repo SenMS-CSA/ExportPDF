@@ -5,12 +5,15 @@
 
 /* global console, document, Excel, Office */
 import { saveAs } from 'file-saver'
+import { PDFDocument } from 'pdf-lib'
+
 Office.onReady((info) => {
   if (info.host === Office.HostType.Excel) {
    Office.addin.setStartupBehavior(Office.StartupBehavior.load);
     document.getElementById("sideload-msg").style.display = "none";
     document.getElementById("app-body").style.display = "flex";
     document.getElementById("run").onclick = run;
+    document.getElementById("exportPage").onclick = exportSpecificPage;
     getDocumentAsPDF();
   }
 });
@@ -129,4 +132,110 @@ function printPDF(pdfUrl) {
     win.onload = function() {
         win.print();
     };
+}
+
+async function exportSpecificPage() {
+  const pageNumberInput = document.getElementById("pageNumber");
+  const statusElement = document.getElementById("exportStatus");
+  const pageNumber = parseInt(pageNumberInput.value, 10);
+
+  if (!pageNumber || pageNumber < 1) {
+    statusElement.textContent = "Please enter a valid page number.";
+    statusElement.style.color = "red";
+    return;
+  }
+
+  statusElement.textContent = "Exporting page " + pageNumber + "...";
+  statusElement.style.color = "#666";
+
+  try {
+    // Get the document as PDF
+    Office.context.document.getFileAsync(Office.FileType.Pdf, async function(result) {
+      if (result.status === "succeeded") {
+        const myFile = result.value;
+        const sliceCount = myFile.sliceCount;
+
+        // Collect all slices
+        const docDataSlices = [];
+        let slicesReceived = 0;
+        let gotAllSlices = true;
+
+        collectSlices(myFile, 0, sliceCount, gotAllSlices, docDataSlices, slicesReceived, async function(allSlices) {
+          try {
+            // Flatten the array of arrays into a single array
+            const flattenedData = allSlices.flat();
+            const pdfBytes = new Uint8Array(flattenedData);
+
+            // Load the PDF document
+            const pdfDoc = await PDFDocument.load(pdfBytes);
+            const totalPages = pdfDoc.getPageCount();
+
+            if (pageNumber > totalPages) {
+              statusElement.textContent = "Page " + pageNumber + " does not exist. Document has " + totalPages + " page(s).";
+              statusElement.style.color = "red";
+              myFile.closeAsync();
+              return;
+            }
+
+            // Create a new PDF with only the specified page
+            const newPdfDoc = await PDFDocument.create();
+            const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [pageNumber - 1]); // 0-indexed
+            newPdfDoc.addPage(copiedPage);
+
+            // Save the new PDF
+            const newPdfBytes = await newPdfDoc.save();
+            const blob = new Blob([newPdfBytes], { type: 'application/pdf' });
+
+            // Download the file
+            const blobUrl = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = blobUrl;
+            link.download = 'page_' + pageNumber + '.pdf';
+            link.click();
+
+            // Open in browser
+            Office.context.ui.openBrowserWindow(blobUrl);
+
+            statusElement.textContent = "Page " + pageNumber + " exported successfully!";
+            statusElement.style.color = "green";
+
+            myFile.closeAsync();
+          } catch (error) {
+            console.error("Error processing PDF:", error);
+            statusElement.textContent = "Error processing PDF: " + error.message;
+            statusElement.style.color = "red";
+            myFile.closeAsync();
+          }
+        });
+      } else {
+        statusElement.textContent = "Failed to get document: " + result.error.message;
+        statusElement.style.color = "red";
+      }
+    });
+  } catch (error) {
+    console.error("Error:", error);
+    statusElement.textContent = "Error: " + error.message;
+    statusElement.style.color = "red";
+  }
+}
+
+function collectSlices(file, nextSlice, sliceCount, gotAllSlices, docDataSlices, slicesReceived, onComplete) {
+  file.getSliceAsync(nextSlice, function(sliceResult) {
+    if (sliceResult.status === "succeeded") {
+      if (!gotAllSlices) {
+        return;
+      }
+
+      docDataSlices[sliceResult.value.index] = sliceResult.value.data;
+      if (++slicesReceived === sliceCount) {
+        onComplete(docDataSlices);
+      } else {
+        collectSlices(file, ++nextSlice, sliceCount, gotAllSlices, docDataSlices, slicesReceived, onComplete);
+      }
+    } else {
+      gotAllSlices = false;
+      file.closeAsync();
+      console.error("getSliceAsync Error:", sliceResult.error.message);
+    }
+  });
 }

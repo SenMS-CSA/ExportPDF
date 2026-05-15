@@ -78,3 +78,45 @@
 b {
     font-weight: bold;
 }
+
+.export-page-section {
+    margin-top: 30px;
+    padding: 20px;
+    border-top: 1px solid #e1e1e1;
+    width: 100%;
+    text-align: center;
+}
+
+.export-page-section h3 {
+    margin-bottom: 15px;
+}
+
+.input-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.input-group label {
+    margin-bottom: 5px;
+}
+
+.input-group input {
+    padding: 8px 12px;
+    border: 1px solid #c8c8c8;
+    border-radius: 2px;
+    font-size: 14px;
+    width: 150px;
+    text-align: center;
+}
+
+.input-group input:focus {
+    border-color: #0078d7;
+    outline: none;
+}
+
+#exportStatus {
+    margin-top: 10px;
+    color: #666;
+}

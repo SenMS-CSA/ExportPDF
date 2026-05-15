@@ -48,6 +48,19 @@
         <div role="button" id="run" class="ms-welcome__action ms-Button ms-Button--hero ms-font-xl">
             <span class="ms-Button-label">Run</span>
         </div>
+        
+        <div class="export-page-section">
+            <h3 class="ms-font-l">Export Specific Page</h3>
+            <div class="input-group">
+                <label for="pageNumber" class="ms-font-m">Page Number:</label>
+                <input type="number" id="pageNumber" class="ms-TextField-field" min="1" placeholder="Enter page number" />
+            </div>
+            <div role="button" id="exportPage" class="ms-welcome__action ms-Button ms-Button--hero ms-font-xl">
+                <span class="ms-Button-label">Export Page as PDF</span>
+            </div>
+            <p id="exportStatus" class="ms-font-s"></p>
+        </div>
+        
         <p><label id="item-subject"></label></p>
     </main>
 </body>
