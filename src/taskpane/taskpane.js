@@ -14,9 +14,46 @@ Office.onReady((info) => {
     document.getElementById("app-body").style.display = "flex";
     document.getElementById("run").onclick = run;
     document.getElementById("exportPage").onclick = exportSpecificPage;
+    document.getElementById("exportAllPages").onchange = togglePageNumberInput;
+    populateSheetDropdown();
     getDocumentAsPDF();
   }
 });
+
+function togglePageNumberInput() {
+  const checkbox = document.getElementById("exportAllPages");
+  const pageNumberGroup = document.getElementById("pageNumberGroup");
+  
+  if (checkbox.checked) {
+    pageNumberGroup.classList.add("disabled");
+  } else {
+    pageNumberGroup.classList.remove("disabled");
+  }
+}
+
+async function populateSheetDropdown() {
+  try {
+    await Excel.run(async (context) => {
+      const sheets = context.workbook.worksheets;
+      sheets.load("items/name");
+      await context.sync();
+
+      const sheetSelect = document.getElementById("sheetSelect");
+      sheetSelect.innerHTML = ""; // Clear loading message
+
+      sheets.items.forEach((sheet) => {
+        const option = document.createElement("option");
+        option.value = sheet.name;
+        option.textContent = sheet.name;
+        sheetSelect.appendChild(option);
+      });
+    });
+  } catch (error) {
+    console.error("Error loading sheets:", error);
+    const sheetSelect = document.getElementById("sheetSelect");
+    sheetSelect.innerHTML = "<option value=''>Error loading sheets</option>";
+  }
+}
 
 export async function run() {
   try {
@@ -136,20 +173,62 @@ function printPDF(pdfUrl) {
 
 async function exportSpecificPage() {
   const pageNumberInput = document.getElementById("pageNumber");
+  const sheetSelect = document.getElementById("sheetSelect");
   const statusElement = document.getElementById("exportStatus");
+  const exportAllCheckbox = document.getElementById("exportAllPages");
+  const exportAll = exportAllCheckbox.checked;
   const pageNumber = parseInt(pageNumberInput.value, 10);
+  const selectedSheet = sheetSelect.value;
 
-  if (!pageNumber || pageNumber < 1) {
+  if (!selectedSheet) {
+    statusElement.textContent = "Please select a sheet.";
+    statusElement.style.color = "red";
+    return;
+  }
+
+  if (!exportAll && (!pageNumber || pageNumber < 1)) {
     statusElement.textContent = "Please enter a valid page number.";
     statusElement.style.color = "red";
     return;
   }
 
-  statusElement.textContent = "Exporting page " + pageNumber + "...";
+  if (exportAll) {
+    statusElement.textContent = "Exporting all pages from '" + selectedSheet + "'...";
+  } else {
+    statusElement.textContent = "Exporting page " + pageNumber + " from '" + selectedSheet + "'...";
+  }
+  statusElement.style.color = "#666";
   statusElement.style.color = "#666";
 
+  let hiddenSheets = [];
+
   try {
-    // Get the document as PDF
+    // Hide all other sheets temporarily so only selected sheet is exported
+    await Excel.run(async (context) => {
+      const sheets = context.workbook.worksheets;
+      sheets.load("items/name, items/visibility");
+      await context.sync();
+
+      // Store original visibility and hide other sheets
+      for (const sheet of sheets.items) {
+        if (sheet.name !== selectedSheet) {
+          if (sheet.visibility === Excel.SheetVisibility.visible) {
+            hiddenSheets.push(sheet.name);
+            sheet.visibility = Excel.SheetVisibility.hidden;
+          }
+        }
+      }
+
+      // Activate the selected sheet
+      const targetSheet = context.workbook.worksheets.getItem(selectedSheet);
+      targetSheet.activate();
+      await context.sync();
+    });
+
+    // Small delay to ensure changes are applied before export
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Get the document as PDF (this will export only the visible sheet)
     Office.context.document.getFileAsync(Office.FileType.Pdf, async function(result) {
       if (result.status === "succeeded") {
         const myFile = result.value;
@@ -170,52 +249,87 @@ async function exportSpecificPage() {
             const pdfDoc = await PDFDocument.load(pdfBytes);
             const totalPages = pdfDoc.getPageCount();
 
-            if (pageNumber > totalPages) {
-              statusElement.textContent = "Page " + pageNumber + " does not exist. Document has " + totalPages + " page(s).";
-              statusElement.style.color = "red";
-              myFile.closeAsync();
-              return;
+            let blob, downloadFileName, successMessage;
+
+            if (exportAll) {
+              // Export all pages - use the original PDF directly
+              blob = new Blob([pdfBytes], { type: 'application/pdf' });
+              downloadFileName = selectedSheet + '_all_pages.pdf';
+              successMessage = "All " + totalPages + " page(s) from '" + selectedSheet + "' exported successfully!";
+            } else {
+              // Export specific page
+              if (pageNumber > totalPages) {
+                statusElement.textContent = "Page " + pageNumber + " does not exist. Sheet '" + selectedSheet + "' has " + totalPages + " page(s).";
+                statusElement.style.color = "red";
+                myFile.closeAsync();
+                await restoreHiddenSheets(hiddenSheets);
+                return;
+              }
+
+              // Create a new PDF with only the specified page
+              const newPdfDoc = await PDFDocument.create();
+              const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [pageNumber - 1]); // 0-indexed
+              newPdfDoc.addPage(copiedPage);
+
+              // Save the new PDF
+              const newPdfBytes = await newPdfDoc.save();
+              blob = new Blob([newPdfBytes], { type: 'application/pdf' });
+              downloadFileName = selectedSheet + '_page_' + pageNumber + '.pdf';
+              successMessage = "Page " + pageNumber + " from '" + selectedSheet + "' exported successfully!";
             }
-
-            // Create a new PDF with only the specified page
-            const newPdfDoc = await PDFDocument.create();
-            const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [pageNumber - 1]); // 0-indexed
-            newPdfDoc.addPage(copiedPage);
-
-            // Save the new PDF
-            const newPdfBytes = await newPdfDoc.save();
-            const blob = new Blob([newPdfBytes], { type: 'application/pdf' });
 
             // Download the file
             const blobUrl = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = blobUrl;
-            link.download = 'page_' + pageNumber + '.pdf';
+            link.download = downloadFileName;
             link.click();
 
             // Open in browser
             Office.context.ui.openBrowserWindow(blobUrl);
 
-            statusElement.textContent = "Page " + pageNumber + " exported successfully!";
+            statusElement.textContent = successMessage;
             statusElement.style.color = "green";
 
             myFile.closeAsync();
+            
+            // Restore hidden sheets
+            await restoreHiddenSheets(hiddenSheets);
           } catch (error) {
             console.error("Error processing PDF:", error);
             statusElement.textContent = "Error processing PDF: " + error.message;
             statusElement.style.color = "red";
             myFile.closeAsync();
+            await restoreHiddenSheets(hiddenSheets);
           }
         });
       } else {
         statusElement.textContent = "Failed to get document: " + result.error.message;
         statusElement.style.color = "red";
+        await restoreHiddenSheets(hiddenSheets);
       }
     });
   } catch (error) {
     console.error("Error:", error);
     statusElement.textContent = "Error: " + error.message;
     statusElement.style.color = "red";
+    await restoreHiddenSheets(hiddenSheets);
+  }
+}
+
+async function restoreHiddenSheets(hiddenSheets) {
+  if (hiddenSheets.length === 0) return;
+  
+  try {
+    await Excel.run(async (context) => {
+      for (const sheetName of hiddenSheets) {
+        const sheet = context.workbook.worksheets.getItem(sheetName);
+        sheet.visibility = Excel.SheetVisibility.visible;
+      }
+      await context.sync();
+    });
+  } catch (error) {
+    console.error("Error restoring sheets:", error);
   }
 }
 
